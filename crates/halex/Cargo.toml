@@ -1,0 +1,10 @@
+[package]
+name = "halex"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ariadne.workspace = true
+miette.workspace = true
+frontend = { path = "../frontend"}
+tycheck = { path = "../tycheck"}

@@ -1,0 +1,13 @@
+[package]
+name = "frontend"
+version = "0.1.0"
+edition = "2024"
+
+
+[dependencies]
+logos = "0.15.0"
+ariadne.workspace = true
+miette.workspace = true
+thiserror.workspace = true
+# miette = { version = "7.0", features = ["fancy"] }
+# thiserror = "2.0"

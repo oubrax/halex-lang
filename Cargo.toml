@@ -1,0 +1,7 @@
+[workspace]
+members = ["crates/frontend", "crates/halex", "crates/tycheck"]
+
+[workspace.dependencies]
+miette = { version = "7.0", features=["fancy"] }
+thiserror = "2.0"
+ariadne = "0.5.1"
