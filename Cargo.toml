@@ -1,7 +1,10 @@
 [workspace]
-members = ["crates/frontend", "crates/halex", "crates/tycheck"]
+members = [ "crates/cranelfit_backend","crates/frontend", "crates/halex", "crates/tycheck"]
+resolver = "3"
 
 [workspace.dependencies]
-miette = { version = "7.0", features=["fancy"] }
 thiserror = "2.0"
 ariadne = "0.5.1"
+bincode = "2.0.1"
+serde = { version = "1.0.219",   features = ["derive"] }
+sirius = "0.1.1"

@@ -1,11 +1,13 @@
+use bincode::{Decode, Encode};
+use serde::{Deserialize, Serialize};
+use sirius::Sirius;
 use std::ops::Range;
 
 use logos::Logos;
-use miette::SourceSpan;
 
 use crate::parser::BinOp;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Sirius, Clone, Copy, PartialEq, Encode, Decode)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
@@ -25,11 +27,6 @@ impl From<Range<usize>> for Span {
     }
 }
 
-impl From<Span> for SourceSpan {
-    fn from(value: Span) -> Self {
-        SourceSpan::from(value.start..value.end)
-    }
-}
 #[derive(PartialEq, Eq, Clone, Copy, Logos)]
 #[logos(skip r"[ \t\r\f]+")]
 #[logos(skip r"#.*")]
@@ -40,7 +37,7 @@ pub enum LogosToken {
     Float,
     #[regex(r#"[\p{L}a-zA-Z_][\p{L}\p{N}a-zA-Z0-9_]*"#)]
     Ident,
-    #[regex(r#""([^"\\]|\\[\s\S])*""#)]
+    #[regex(r#""([^"]|\\[\s\S])*""#)]
     String,
     #[token("true")]
     True,
@@ -181,7 +178,7 @@ impl LogosToken {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Token {
     pub kind: LogosToken,
     pub span: Span,
@@ -203,9 +200,7 @@ impl Token {
 
 pub struct LLexer<'a> {
     generated: logos::SpannedIter<'a, LogosToken>,
-    current: Option<Token>,
     peeked: Option<Token>,
-    pos: usize,
     eof: bool,
     input_len: usize,
 }
@@ -214,15 +209,26 @@ impl<'a> Iterator for LLexer<'a> {
     type Item = Token;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // If we have a peeked token, return it and clear the peek buffer
         if let Some(token) = self.peeked.take() {
-            self.pos += 1;
-            self.current = Some(token.clone());
-            return Some(token);
+            Some(token)
+        } else {
+            self.advance_token()
         }
+    }
+}
 
-        self.pos += 1;
-        let token = match self.generated.next() {
+impl<'a> LLexer<'a> {
+    pub fn new(input: &'a str) -> Self {
+        Self {
+            generated: LogosToken::lexer(input).spanned(),
+            eof: false,
+            peeked: None,
+            input_len: input.len(),
+        }
+    }
+
+    fn advance_token(&mut self) -> Option<Token> {
+        match self.generated.next() {
             Some((token, span)) => {
                 let token = token.unwrap_or(LogosToken::Error);
                 Some(Token {
@@ -238,22 +244,6 @@ impl<'a> Iterator for LLexer<'a> {
                     span: (self.input_len..self.input_len).into(),
                 })
             }
-        };
-        self.current = token.clone();
-
-        token
-    }
-}
-
-impl<'a> LLexer<'a> {
-    pub fn new(input: &'a str) -> Self {
-        Self {
-            generated: LogosToken::lexer(input).spanned(),
-            eof: false,
-            pos: 0,
-            current: None,
-            peeked: None,
-            input_len: input.len(),
         }
     }
 
@@ -261,38 +251,12 @@ impl<'a> LLexer<'a> {
         self.generated.span().into()
     }
 
-    pub fn current(&self) -> Option<Token> {
-        self.current.clone()
-    }
-
-    pub fn pos(&self) -> usize {
-        self.pos
-    }
-
     /// Peek at the next token without consuming it
-    pub fn peek(&mut self) -> Option<&Token> {
+    pub fn peek(&mut self) -> Option<Token> {
         if self.peeked.is_none() {
-            // Generate the next token and store it in the peek buffer
-            let token = match self.generated.next() {
-                Some((token, span)) => {
-                    let token = token.unwrap_or(LogosToken::Error);
-                    Some(Token {
-                        kind: token,
-                        span: span.into(),
-                    })
-                }
-                None if self.eof => None,
-                None => {
-                    self.eof = true;
-                    Some(Token {
-                        kind: LogosToken::Eof,
-                        span: (self.input_len..self.input_len).into(),
-                    })
-                }
-            };
-            self.peeked = token;
+            self.peeked = self.advance_token();
         }
-        self.peeked.as_ref()
+        self.peeked
     }
 
     /// Peek at the next token's kind without consuming it
@@ -355,26 +319,6 @@ mod tests {
         assert!(eof_token.is_eof());
 
         assert!(lexer.next().is_none());
-    }
-
-    #[test]
-    fn llexer_current_and_pos() {
-        let mut lexer = LLexer::new("+ -");
-
-        assert!(lexer.current().is_none());
-        assert_eq!(lexer.pos(), 0);
-
-        lexer.next();
-        assert_eq!(lexer.current().unwrap().kind, LogosToken::Plus);
-        assert_eq!(lexer.pos(), 1);
-
-        lexer.next();
-        assert_eq!(lexer.current().unwrap().kind, LogosToken::Minus);
-        assert_eq!(lexer.pos(), 2);
-
-        lexer.next(); // EOF
-        assert_eq!(lexer.current().unwrap().kind, LogosToken::Eof);
-        assert_eq!(lexer.pos(), 3);
     }
 
     #[test]
@@ -448,7 +392,7 @@ mod tests {
         assert_eq!(token2.kind, LogosToken::String);
         assert_eq!(
             token2.text(r#""hello world" "escaped \"quote\"" "newline\n""#),
-            r#""escaped \"quote\"""#
+            r#""escaped \"quote\""#
         );
 
         let token3 = lexer.next().unwrap();

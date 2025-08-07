@@ -5,6 +5,6 @@ edition = "2024"
 
 [dependencies]
 ariadne.workspace = true
-miette.workspace = true
+bincode.workspace = true
 frontend = { path = "../frontend"}
 tycheck = { path = "../tycheck"}

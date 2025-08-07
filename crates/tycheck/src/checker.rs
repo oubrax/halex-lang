@@ -1,16 +1,12 @@
-use core::panic;
-use std::{collections::HashMap, fmt::Display, sync::Arc};
+use std::{collections::HashMap, fmt::Display};
 
 use ariadne::{Color, ColorGenerator, Fmt, Label, Report};
 use frontend::{
     Expr, ExprKind, Literal, NodeId, ReportedError, Span, Spanned, Stmt, StmtKind, Type,
 };
 
-use miette::{Diagnostic, Result, SourceSpan};
-use thiserror::Error;
-
 #[derive(Clone, Debug)]
-pub enum CheckerError {
+pub enum CheckerError<'a> {
     TypeMismatch {
         found: Ty,
         expected: Ty,
@@ -18,7 +14,7 @@ pub enum CheckerError {
         found_span: Span,
         is_found_var: bool,
         is_expected_var: bool,
-        unify_ctx: Option<UnifyContext>,
+        unify_ctx: Option<UnifyContext<'a>>,
     },
 
     CouldntInfer {
@@ -26,13 +22,13 @@ pub enum CheckerError {
     },
 
     NotFound {
-        name: Arc<str>,
+        name: &'a str,
         ident_span: Span,
     },
 }
 
-impl ReportedError for CheckerError {
-    fn build_report<'a>(&'a self, file: &'a str) -> Report<'a, (&'a str, std::ops::Range<usize>)> {
+impl<'a> ReportedError for CheckerError<'a> {
+    fn build_report<'b>(&'b self, file: &'b str) -> Report<'b, (&'b str, std::ops::Range<usize>)> {
         let mut colors = ColorGenerator::new();
         let out = Color::Fixed(81);
         match self {
@@ -125,7 +121,10 @@ impl ReportedError for CheckerError {
                     .with_help("please add type annotation")
                     .finish()
             }
-            Self::NotFound { name, ident_span } => {
+            Self::NotFound {
+                name: _,
+                ident_span,
+            } => {
                 let color = colors.next();
 
                 Report::build(ariadne::ReportKind::Error, (file, ident_span.as_range()))
@@ -247,25 +246,25 @@ impl Ty {
 }
 
 #[derive(Clone, Debug)]
-pub enum UnifyContext {
-    Variable(Arc<str>),
+pub enum UnifyContext<'a> {
+    Variable(&'a str),
     Binary,
     Return,
 }
 
 #[derive(Clone, Debug)]
-enum Constraint {
-    Unify(Spanned<Ty>, Spanned<Ty>, Option<UnifyContext>),
+enum Constraint<'a> {
+    Unify(Spanned<Ty>, Spanned<Ty>, Option<UnifyContext<'a>>),
     Int(Spanned<Ty>),
 }
 
 type Item = Spanned<Ty>;
 #[derive(Debug)]
-pub struct Scope {
-    stack: Vec<HashMap<Arc<str>, Item>>,
+pub struct Scope<'a> {
+    stack: Vec<HashMap<&'a str, Item>>,
 }
 
-impl Scope {
+impl<'a> Scope<'a> {
     pub fn new() -> Self {
         Self {
             stack: vec![HashMap::new()], // global scope
@@ -282,14 +281,14 @@ impl Scope {
             .expect("Tried to pop from empty scope stack");
     }
 
-    pub fn insert(&mut self, name: Arc<str>, item: Item) {
+    pub fn insert(&mut self, name: &'a str, item: Item) {
         self.stack
             .last_mut()
             .expect("No current scope")
             .insert(name, item);
     }
 
-    pub fn get(&self, name: &Arc<str>) -> Option<&Item> {
+    pub fn get(&self, name: &&'a str) -> Option<&Item> {
         for scope in self.stack.iter().rev() {
             if let Some(item) = scope.get(name) {
                 return Some(item);
@@ -298,7 +297,7 @@ impl Scope {
         None
     }
 
-    pub fn get_mut(&mut self, name: &Arc<str>) -> Option<&mut Item> {
+    pub fn get_mut(&mut self, name: &&'a str) -> Option<&mut Item> {
         for scope in self.stack.iter_mut().rev() {
             if let Some(item) = scope.get_mut(name) {
                 return Some(item);
@@ -307,26 +306,26 @@ impl Scope {
         None
     }
 
-    pub fn contains(&self, name: &Arc<str>) -> bool {
+    pub fn contains(&self, name: &&'a str) -> bool {
         self.get(name).is_some()
     }
 
-    pub fn current_scope_mut(&mut self) -> &mut HashMap<Arc<str>, Item> {
+    pub fn current_scope_mut(&mut self) -> &mut HashMap<&'a str, Item> {
         self.stack.last_mut().expect("No current scope to mutate")
     }
 }
-pub struct Checker {
-    scope: Scope,
+pub struct Checker<'a> {
+    scope: Scope<'a>,
     subst: HashMap<VarId, Ty>,
     unresolved_vars: HashMap<VarId, Span>,
-    constraints: Vec<Constraint>,
-    errors: Vec<CheckerError>,
+    constraints: Vec<Constraint<'a>>,
+    errors: Vec<CheckerError<'a>>,
     typemap: HashMap<NodeId, Ty>,
     next_var: usize,
     in_function: Option<Spanned<Ty>>,
 }
 
-impl Checker {
+impl<'a> Checker<'a> {
     pub fn new() -> Self {
         Self {
             scope: Scope::new(),
@@ -339,7 +338,10 @@ impl Checker {
             unresolved_vars: HashMap::new(),
         }
     }
-    pub fn solve(&mut self, stmts: &Vec<Stmt>) -> Result<HashMap<NodeId, Ty>, Vec<CheckerError>> {
+    pub fn solve(
+        &mut self,
+        stmts: &[Stmt<'a>],
+    ) -> Result<HashMap<NodeId, Ty>, Vec<CheckerError<'a>>> {
         for stmt in stmts {
             self.infer_stmt(stmt);
         }
@@ -363,7 +365,7 @@ impl Checker {
         }
     }
 
-    fn handle_errors(&mut self, constraint: Vec<Constraint>) {
+    fn handle_errors(&mut self, constraint: Vec<Constraint<'a>>) {
         for c in constraint {
             match c {
                 Constraint::Unify(a, b, unify_ctx) => {
@@ -445,7 +447,7 @@ impl Checker {
         )
     }
 
-    fn infer_stmt(&mut self, stmt: &Stmt) -> Ty {
+    fn infer_stmt(&mut self, stmt: &Stmt<'a>) -> Ty {
         let ty = match &stmt.kind {
             StmtKind::Expr(expr) => self.infer_expr(expr).inner,
             StmtKind::Function {
@@ -454,7 +456,7 @@ impl Checker {
                 return_type,
                 body,
             } => {
-                let name_arc = name.inner.clone();
+                let name_str = name.inner;
 
                 let mut params_ty = Vec::new();
                 for (_, param_ty) in params {
@@ -466,7 +468,7 @@ impl Checker {
                 self.in_function = Some(return_ty.clone());
                 let span = Span::from(name.span.start..return_type.span.end);
                 self.scope.insert(
-                    name_arc,
+                    name_str,
                     Spanned::new(
                         Ty::Fn {
                             params: params_ty.iter().map(|p| p.clone()).collect(),
@@ -479,7 +481,7 @@ impl Checker {
                 self.scope.enter_scope();
 
                 for ((param_name, _), param_ty) in params.iter().zip(params_ty.iter()) {
-                    self.scope.insert(param_name.clone(), param_ty.clone());
+                    self.scope.insert(*param_name, param_ty.clone());
                 }
 
                 let block = self.infer_expr(body);
@@ -495,7 +497,7 @@ impl Checker {
                 type_ann,
                 value,
             } => {
-                let name_arc = name.inner.clone();
+                let name_str = name.inner;
 
                 let _ty_ann: Option<Spanned<Ty>> = type_ann.as_ref().map(|t| self.to_ty(t));
                 dbg!(&_ty_ann);
@@ -506,12 +508,12 @@ impl Checker {
                 let ty_expr = self.infer_expr(value);
 
                 self.scope
-                    .insert(name_arc.clone(), _ty_ann.unwrap_or(ty_expr.clone()));
+                    .insert(name_str, _ty_ann.unwrap_or(ty_expr.clone()));
 
                 self.constraints.push(Constraint::Unify(
                     ty_ann,
                     ty_expr,
-                    Some(UnifyContext::Variable(name_arc.clone())),
+                    Some(UnifyContext::Variable(name_str)),
                 ));
                 Ty::Unit
             }
@@ -549,13 +551,13 @@ impl Checker {
         ty
     }
 
-    fn infer_expr(&mut self, expr: &Expr) -> Spanned<Ty> {
+    fn infer_expr(&mut self, expr: &Expr<'a>) -> Spanned<Ty> {
         let (ty, span) = match &expr.kind {
             ExprKind::Identifier(name) => (
                 match self.scope.get(name) {
                     None => {
                         self.errors.push(CheckerError::NotFound {
-                            name: name.clone(),
+                            name: *name,
                             ident_span: expr.span,
                         });
                         Ty::Never
@@ -630,7 +632,7 @@ impl Checker {
                     },
                     None => {
                         self.errors.push(CheckerError::NotFound {
-                            name: name.inner.clone(),
+                            name: name.inner,
                             ident_span: name.span,
                         });
                         Ty::Never
@@ -669,6 +671,8 @@ impl Checker {
                 },
                 expr.span,
             ),
+
+            ExprKind::Unit => (Ty::Unit, expr.span),
             _ => todo!(),
         };
         self.typemap.insert(expr.id, ty.clone());
@@ -743,7 +747,7 @@ impl Checker {
             _ => false,
         }
     }
-    fn solve_constraints(&mut self) -> Vec<Constraint> {
+    fn solve_constraints(&mut self) -> Vec<Constraint<'a>> {
         let constraints = loop {
             let mut constraints = std::mem::take(&mut self.constraints);
             let initial_length = constraints.len();

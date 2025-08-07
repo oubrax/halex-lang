@@ -5,6 +5,5 @@ edition = "2024"
 
 [dependencies]
 frontend = { path = "../frontend"}
-miette.workspace = true
 thiserror.workspace = true
 ariadne.workspace = true
