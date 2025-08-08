@@ -18,6 +18,3 @@ add(&num)
 
 ```
 
-# datatypes
-```rs
-e

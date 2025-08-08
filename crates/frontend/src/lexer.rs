@@ -1,5 +1,5 @@
 use bincode::{Decode, Encode};
-use serde::{Deserialize, Serialize};
+
 use sirius::Sirius;
 use std::ops::Range;
 

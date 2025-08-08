@@ -5,9 +5,9 @@ use crate::{
     lexer::{LLexer, LogosToken, Token},
 };
 use ariadne::{Color, ColorGenerator, Fmt, Label, Report};
-use bincode::{BorrowDecode, Decode, Encode};
+use bincode::{Decode, Encode};
 
-type Param<'a> = (&'a str, Spanned<Type>);
+type Param = (String, Spanned<Type>);
 
 pub type ParseResult<T> = Result<T, ParseError>;
 
@@ -139,11 +139,11 @@ impl<T> Spanned<T> {
         Self { inner, span }
     }
 }
-#[derive(Debug, Clone, Encode, BorrowDecode, PartialEq)]
-pub enum Literal<'a> {
+#[derive(Debug, Clone, Encode, Decode, PartialEq)]
+pub enum Literal {
     Int(i64),
     Float(f64),
-    Str(&'a str),
+    Str(String),
 }
 
 /// Binary operator used for infix operations (1 + 1) etc
@@ -173,66 +173,66 @@ pub enum UnaryOp {
 #[derive(Debug, Hash, Clone, Copy, Eq, Encode, Decode, PartialEq)]
 pub struct NodeId(usize);
 
-#[derive(Debug, Clone, PartialEq, Encode, BorrowDecode)]
-pub struct Expr<'a> {
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub struct Expr {
     pub id: NodeId,
-    pub kind: ExprKind<'a>,
+    pub kind: ExprKind,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Encode, BorrowDecode, PartialEq)]
-pub enum ExprKind<'a> {
-    Literal(Literal<'a>),
-    Identifier(&'a str),
+#[derive(Debug, Clone, Encode, Decode, PartialEq)]
+pub enum ExprKind {
+    Literal(Literal),
+    Identifier(String),
     Binary {
-        left: Box<Expr<'a>>,
+        left: Box<Expr>,
         op: BinOp,
-        right: Box<Expr<'a>>,
+        right: Box<Expr>,
     },
     Unary {
         op: UnaryOp,
-        operand: Box<Expr<'a>>,
+        operand: Box<Expr>,
     },
     Call {
-        name: Spanned<&'a str>,
-        args: Vec<Expr<'a>>,
+        name: Spanned<String>,
+        args: Vec<Expr>,
     },
     Unit,
-    Block(Vec<Stmt<'a>>),
+    Block(Vec<Stmt>),
     Error,
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, BorrowDecode)]
-pub struct Stmt<'a> {
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub struct Stmt {
     pub id: NodeId,
-    pub kind: StmtKind<'a>,
+    pub kind: StmtKind,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Encode, BorrowDecode, PartialEq)]
-pub enum StmtKind<'a> {
+#[derive(Debug, Clone, Encode, Decode, PartialEq)]
+pub enum StmtKind {
     Let {
-        name: Spanned<&'a str>,
+        name: Spanned<String>,
         type_ann: Option<Spanned<Type>>,
-        value: Expr<'a>,
+        value: Expr,
     },
     Assign {
-        name: Expr<'a>,
-        value: Expr<'a>,
+        name: Expr,
+        value: Expr,
     },
-    Return(Option<Expr<'a>>),
+    Return(Option<Expr>),
     Function {
-        name: Spanned<&'a str>,
-        params: Vec<Param<'a>>,
+        name: Spanned<String>,
+        params: Vec<Param>,
         return_type: Spanned<Type>,
-        body: Expr<'a>,
+        body: Expr,
     },
     Extern {
-        name: Spanned<&'a str>,
-        params: Vec<Param<'a>>,
+        name: Spanned<String>,
+        params: Vec<Param>,
         return_type: Spanned<Type>,
     },
-    Expr(Expr<'a>),
+    Expr(Expr),
     Error,
 }
 
@@ -378,7 +378,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Create an error expression for recovery
-    fn error_expr(&mut self, span: Span) -> Expr<'a> {
+    fn error_expr(&mut self, span: Span) -> Expr {
         Expr {
             id: self.get_node_id(),
             kind: ExprKind::Error,
@@ -387,7 +387,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Create an error statement for recovery
-    fn error_stmt(&mut self, span: Span) -> Stmt<'a> {
+    fn error_stmt(&mut self, span: Span) -> Stmt {
         Stmt {
             id: self.get_node_id(),
             kind: StmtKind::Error,
@@ -395,7 +395,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_primary(&mut self) -> ParseResult<Expr<'a>> {
+    fn parse_primary(&mut self) -> ParseResult<Expr> {
         let start_token = self.next();
         let start_pos = start_token.span.start;
 
@@ -430,7 +430,7 @@ impl<'a> Parser<'a> {
                 let content = &text[1..text.len() - 1];
                 Ok(Expr {
                     id: self.get_node_id(),
-                    kind: ExprKind::Literal(Literal::Str(content)),
+                    kind: ExprKind::Literal(Literal::Str(content.to_string())),
                     span: start_token.span,
                 })
             }
@@ -445,8 +445,8 @@ impl<'a> Parser<'a> {
                 span: start_token.span,
             }),
             LogosToken::Ident => {
-                let name = start_token.text(self.input);
-                let spanned_name = Spanned::new(name, start_token.span);
+                let name = start_token.text(self.input).to_string();
+                let spanned_name = Spanned::new(name.clone(), start_token.span);
                 let ident = Expr {
                     id: self.get_node_id(),
                     kind: ExprKind::Identifier(name),
@@ -604,7 +604,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse argument list with better error recovery
-    fn parse_argument_list(&mut self) -> ParseResult<Vec<Expr<'a>>> {
+    fn parse_argument_list(&mut self) -> ParseResult<Vec<Expr>> {
         let mut args = Vec::new();
 
         self.skip_newlines();
@@ -664,7 +664,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse block content with better error recovery
-    fn parse_block_content(&mut self, start_pos: usize) -> ParseResult<Expr<'a>> {
+    fn parse_block_content(&mut self, start_pos: usize) -> ParseResult<Expr> {
         let mut statements = Vec::new();
         let mut has_sep = true;
         let opening_span = (start_pos..start_pos + 1).into();
@@ -834,7 +834,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Helper method to parse parameter lists with error recovery
-    fn parse_parameter_list(&mut self) -> ParseResult<(Vec<Param<'a>>, Span)> {
+    fn parse_parameter_list(&mut self) -> ParseResult<(Vec<Param>, Span)> {
         let opening_paren_span = if self.lexer.peek_is(LogosToken::LParen) {
             let token = self.next();
             self.push_delimiter(LogosToken::LParen, token.span.into());
@@ -860,10 +860,10 @@ impl<'a> Parser<'a> {
                     LogosToken::Ident,
                     &[LogosToken::Colon, LogosToken::Comma, LogosToken::RParen],
                 ) {
-                    Ok(token) => token.text(self.input),
+                    Ok(token) => token.text(self.input).to_string(),
                     Err(e) => {
                         self.error(e);
-                        "_error_"
+                        "_error_".to_string()
                     }
                 };
 
@@ -924,15 +924,15 @@ impl<'a> Parser<'a> {
     }
 
     /// Helper method to parse function name with error recovery
-    fn parse_function_name(&mut self) -> ParseResult<Spanned<&'a str>> {
+    fn parse_function_name(&mut self) -> ParseResult<Spanned<String>> {
         match self.expect_with_recovery(
             LogosToken::Ident,
             &[LogosToken::LParen, LogosToken::RParen, LogosToken::Newline],
         ) {
-            Ok(token) => Ok(Spanned::new(token.text(self.input), token.span)),
+            Ok(token) => Ok(Spanned::new(token.text(self.input).to_string(), token.span)),
             Err(e) => {
                 self.error(e);
-                Ok(Spanned::new("_error_", self.current().span))
+                Ok(Spanned::new("_error_".to_string(), self.current().span))
             }
         }
     }
@@ -1068,7 +1068,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_statement(&mut self) -> ParseResult<Stmt<'a>> {
+    pub fn parse_statement(&mut self) -> ParseResult<Stmt> {
         let start = if let Some(peeked) = self.lexer.peek() {
             peeked.span.start
         } else {
@@ -1085,10 +1085,10 @@ impl<'a> Parser<'a> {
                         LogosToken::Ident,
                         &[LogosToken::Eq, LogosToken::Semicolon, LogosToken::Newline],
                     ) {
-                        Ok(token) => Spanned::new(token.text(self.input), token.span),
+                        Ok(token) => Spanned::new(token.text(self.input).to_string(), token.span),
                         Err(e) => {
                             self.error(e);
-                            Spanned::new("_error_", self.current().span)
+                            Spanned::new("_error_".to_string(), self.current().span)
                         }
                     };
 
@@ -1270,7 +1270,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse_expression(&mut self, min_prec: u8) -> ParseResult<Expr<'a>> {
+    pub fn parse_expression(&mut self, min_prec: u8) -> ParseResult<Expr> {
         let mut left = self.parse_primary()?;
         loop {
             let op = if let Some(peeked) = self.lexer.peek() {
@@ -1322,7 +1322,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a complete program (multiple statements)
-    pub fn parse_program(mut self) -> (Vec<Stmt<'a>>, Vec<ParseError>) {
+    pub fn parse_program(mut self) -> (Vec<Stmt>, Vec<ParseError>) {
         let mut statements = Vec::new();
         let mut has_sep = true;
 

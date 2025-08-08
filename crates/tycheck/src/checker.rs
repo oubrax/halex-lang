@@ -6,7 +6,7 @@ use frontend::{
 };
 
 #[derive(Clone, Debug)]
-pub enum CheckerError<'a> {
+pub enum CheckerError {
     TypeMismatch {
         found: Ty,
         expected: Ty,
@@ -14,7 +14,7 @@ pub enum CheckerError<'a> {
         found_span: Span,
         is_found_var: bool,
         is_expected_var: bool,
-        unify_ctx: Option<UnifyContext<'a>>,
+        unify_ctx: Option<UnifyContext>,
     },
 
     CouldntInfer {
@@ -22,12 +22,12 @@ pub enum CheckerError<'a> {
     },
 
     NotFound {
-        name: &'a str,
+        name: String,
         ident_span: Span,
     },
 }
 
-impl<'a> ReportedError for CheckerError<'a> {
+impl ReportedError for CheckerError {
     fn build_report<'b>(&'b self, file: &'b str) -> Report<'b, (&'b str, std::ops::Range<usize>)> {
         let mut colors = ColorGenerator::new();
         let out = Color::Fixed(81);
@@ -147,7 +147,6 @@ pub struct VarId(usize);
 #[derive(Debug, Hash, Eq, PartialEq, PartialOrd, Copy, Clone)]
 enum Origin {
     Integer,
-    Float,
     Infer,
 }
 
@@ -185,8 +184,7 @@ impl std::fmt::Debug for Var {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.origin {
             Origin::Integer => write!(f, "{{int}}"),
-            Origin::Infer => write!(f, "'{}", self.id.0),
-            Origin::Float => write!(f, "{{float}}"),
+            Origin::Infer => write!(f, "' {}", self.id.0),
         }
     }
 }
@@ -246,25 +244,25 @@ impl Ty {
 }
 
 #[derive(Clone, Debug)]
-pub enum UnifyContext<'a> {
-    Variable(&'a str),
+pub enum UnifyContext {
+    Variable(String),
     Binary,
     Return,
 }
 
 #[derive(Clone, Debug)]
-enum Constraint<'a> {
-    Unify(Spanned<Ty>, Spanned<Ty>, Option<UnifyContext<'a>>),
+enum Constraint {
+    Unify(Spanned<Ty>, Spanned<Ty>, Option<UnifyContext>),
     Int(Spanned<Ty>),
 }
 
 type Item = Spanned<Ty>;
 #[derive(Debug)]
-pub struct Scope<'a> {
-    stack: Vec<HashMap<&'a str, Item>>,
+pub struct Scope {
+    stack: Vec<HashMap<String, Item>>,
 }
 
-impl<'a> Scope<'a> {
+impl Scope {
     pub fn new() -> Self {
         Self {
             stack: vec![HashMap::new()], // global scope
@@ -281,14 +279,14 @@ impl<'a> Scope<'a> {
             .expect("Tried to pop from empty scope stack");
     }
 
-    pub fn insert(&mut self, name: &'a str, item: Item) {
+    pub fn insert(&mut self, name: String, item: Item) {
         self.stack
             .last_mut()
             .expect("No current scope")
             .insert(name, item);
     }
 
-    pub fn get(&self, name: &&'a str) -> Option<&Item> {
+    pub fn get(&self, name: &str) -> Option<&Item> {
         for scope in self.stack.iter().rev() {
             if let Some(item) = scope.get(name) {
                 return Some(item);
@@ -297,7 +295,7 @@ impl<'a> Scope<'a> {
         None
     }
 
-    pub fn get_mut(&mut self, name: &&'a str) -> Option<&mut Item> {
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut Item> {
         for scope in self.stack.iter_mut().rev() {
             if let Some(item) = scope.get_mut(name) {
                 return Some(item);
@@ -306,26 +304,26 @@ impl<'a> Scope<'a> {
         None
     }
 
-    pub fn contains(&self, name: &&'a str) -> bool {
+    pub fn contains(&self, name: &str) -> bool {
         self.get(name).is_some()
     }
 
-    pub fn current_scope_mut(&mut self) -> &mut HashMap<&'a str, Item> {
+    pub fn current_scope_mut(&mut self) -> &mut HashMap<String, Item> {
         self.stack.last_mut().expect("No current scope to mutate")
     }
 }
-pub struct Checker<'a> {
-    scope: Scope<'a>,
+pub struct Checker {
+    scope: Scope,
     subst: HashMap<VarId, Ty>,
     unresolved_vars: HashMap<VarId, Span>,
-    constraints: Vec<Constraint<'a>>,
-    errors: Vec<CheckerError<'a>>,
+    constraints: Vec<Constraint>,
+    errors: Vec<CheckerError>,
     typemap: HashMap<NodeId, Ty>,
     next_var: usize,
     in_function: Option<Spanned<Ty>>,
 }
 
-impl<'a> Checker<'a> {
+impl Checker {
     pub fn new() -> Self {
         Self {
             scope: Scope::new(),
@@ -338,10 +336,7 @@ impl<'a> Checker<'a> {
             unresolved_vars: HashMap::new(),
         }
     }
-    pub fn solve(
-        &mut self,
-        stmts: &[Stmt<'a>],
-    ) -> Result<HashMap<NodeId, Ty>, Vec<CheckerError<'a>>> {
+    pub fn solve(&mut self, stmts: &[Stmt]) -> Result<HashMap<NodeId, Ty>, Vec<CheckerError>> {
         for stmt in stmts {
             self.infer_stmt(stmt);
         }
@@ -353,7 +348,6 @@ impl<'a> Checker<'a> {
         self.constraints = constraints;
 
         let constraints = self.solve_constraints();
-        println!("{:#?}", constraints);
         self.concreticize();
 
         self.handle_errors(constraints);
@@ -365,7 +359,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn handle_errors(&mut self, constraint: Vec<Constraint<'a>>) {
+    fn handle_errors(&mut self, constraint: Vec<Constraint>) {
         for c in constraint {
             match c {
                 Constraint::Unify(a, b, unify_ctx) => {
@@ -403,8 +397,6 @@ impl<'a> Checker<'a> {
         }
     }
     fn concreticize(&mut self) {
-        println!("{:?}", self.scope);
-
         for (id, var_span) in &self.unresolved_vars {
             if matches!(self.find(&Ty::Var(Var::new(*id))), Ty::Var(_)) {
                 self.errors.push(CheckerError::CouldntInfer {
@@ -447,7 +439,7 @@ impl<'a> Checker<'a> {
         )
     }
 
-    fn infer_stmt(&mut self, stmt: &Stmt<'a>) -> Ty {
+    fn infer_stmt(&mut self, stmt: &Stmt) -> Ty {
         let ty = match &stmt.kind {
             StmtKind::Expr(expr) => self.infer_expr(expr).inner,
             StmtKind::Function {
@@ -456,7 +448,7 @@ impl<'a> Checker<'a> {
                 return_type,
                 body,
             } => {
-                let name_str = name.inner;
+                let name_str = name.inner.clone();
 
                 let mut params_ty = Vec::new();
                 for (_, param_ty) in params {
@@ -481,7 +473,7 @@ impl<'a> Checker<'a> {
                 self.scope.enter_scope();
 
                 for ((param_name, _), param_ty) in params.iter().zip(params_ty.iter()) {
-                    self.scope.insert(*param_name, param_ty.clone());
+                    self.scope.insert(param_name.clone(), param_ty.clone());
                 }
 
                 let block = self.infer_expr(body);
@@ -497,10 +489,9 @@ impl<'a> Checker<'a> {
                 type_ann,
                 value,
             } => {
-                let name_str = name.inner;
+                let name_str = name.inner.clone();
 
                 let _ty_ann: Option<Spanned<Ty>> = type_ann.as_ref().map(|t| self.to_ty(t));
-                dbg!(&_ty_ann);
                 let ty_ann = _ty_ann.clone().unwrap_or_else(|| {
                     Spanned::new(Ty::Var(Var::new(self.new_var(name.span))), name.span)
                 });
@@ -508,7 +499,7 @@ impl<'a> Checker<'a> {
                 let ty_expr = self.infer_expr(value);
 
                 self.scope
-                    .insert(name_str, _ty_ann.unwrap_or(ty_expr.clone()));
+                    .insert(name_str.clone(), _ty_ann.unwrap_or(ty_expr.clone()));
 
                 self.constraints.push(Constraint::Unify(
                     ty_ann,
@@ -551,22 +542,19 @@ impl<'a> Checker<'a> {
         ty
     }
 
-    fn infer_expr(&mut self, expr: &Expr<'a>) -> Spanned<Ty> {
+    fn infer_expr(&mut self, expr: &Expr) -> Spanned<Ty> {
         let (ty, span) = match &expr.kind {
             ExprKind::Identifier(name) => (
                 match self.scope.get(name) {
                     None => {
                         self.errors.push(CheckerError::NotFound {
-                            name: *name,
+                            name: name.clone(),
                             ident_span: expr.span,
                         });
                         Ty::Never
                     }
 
-                    Some(item) => {
-                        println!("{item:?}");
-                        item.inner.clone()
-                    }
+                    Some(item) => item.inner.clone(),
                 },
                 expr.span,
             ),
@@ -625,14 +613,13 @@ impl<'a> Checker<'a> {
                             ret_ty.inner
                         }
                         _ => {
-                            println!("Oops");
                             // emit error
                             Ty::Never
                         }
                     },
                     None => {
                         self.errors.push(CheckerError::NotFound {
-                            name: name.inner,
+                            name: name.inner.clone(),
                             ident_span: name.span,
                         });
                         Ty::Never
@@ -656,7 +643,7 @@ impl<'a> Checker<'a> {
 
                 res.unwrap_or((Ty::Unit, expr.span))
             }
-            ExprKind::Binary { left, op, right } => (
+            ExprKind::Binary { left, op: _, right } => (
                 {
                     let lhs_ty = self.infer_expr(left.as_ref());
                     let rhs_ty = self.infer_expr(right.as_ref());
@@ -747,11 +734,10 @@ impl<'a> Checker<'a> {
             _ => false,
         }
     }
-    fn solve_constraints(&mut self) -> Vec<Constraint<'a>> {
+    fn solve_constraints(&mut self) -> Vec<Constraint> {
         let constraints = loop {
             let mut constraints = std::mem::take(&mut self.constraints);
             let initial_length = constraints.len();
-            println!("{:?}", constraints);
             constraints.retain(|constraint| !self.solve_constraint(&constraint));
 
             if constraints.len() == initial_length {
@@ -761,17 +747,9 @@ impl<'a> Checker<'a> {
             self.constraints.extend(constraints);
         };
 
-        dbg!(&constraints);
         constraints
     }
 
-    fn is_compatible(&self, origin: Origin, ty: &Ty) -> bool {
-        match origin {
-            Origin::Integer => ty.is_integer(),
-            Origin::Float => todo!(),
-            Origin::Infer => true,
-        }
-    }
     // fn occurs_check(&mut self, var: Ty, )
     fn solve_constraint(&mut self, constraint: &Constraint) -> bool {
         match constraint {
@@ -781,7 +759,6 @@ impl<'a> Checker<'a> {
                 if a == b {
                     return true;
                 }
-                println!("UNIFY {:?} = {:?}", a, b);
 
                 match (a, b) {
                     (Ty::Never, _) | (_, Ty::Never) => true,
@@ -817,7 +794,6 @@ impl<'a> Checker<'a> {
                             (a, b) if a == b => b,
                             _ => return false,
                         };
-                        println!("{:?}={:?}", a, b);
                         self.subst.insert(a.id, Ty::Var(Var { origin, id: b.id }));
                         true
                     }
@@ -840,14 +816,13 @@ impl<'a> Checker<'a> {
                                 self.unresolved_vars.remove(&var.id);
                                 true
                             }
-                            Origin::Float => todo!(),
                         }
                     }
                     _ => false,
                 }
             }
 
-            Constraint::Int(ty) => false,
+            Constraint::Int(_ty) => false,
         }
     }
 }
