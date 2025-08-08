@@ -1,14 +1,13 @@
-use std::{any::TypeId, ops::Range, sync::Arc, vec};
+use std::{ops::Range, vec};
 
 use crate::{
     ReportedError, Span,
     lexer::{LLexer, LogosToken, Token},
 };
 use ariadne::{Color, ColorGenerator, Fmt, Label, Report};
-use miette::{Diagnostic, SourceSpan};
-use thiserror::Error;
+use bincode::{Decode, Encode};
 
-type Param = (Arc<str>, Spanned<Type>);
+type Param = (String, Spanned<Type>);
 
 pub type ParseResult<T> = Result<T, ParseError>;
 
@@ -129,7 +128,7 @@ impl ReportedError for ParseError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct Spanned<T> {
     pub inner: T,
     pub span: Span,
@@ -140,15 +139,15 @@ impl<T> Spanned<T> {
         Self { inner, span }
     }
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq)]
 pub enum Literal {
     Int(i64),
     Float(f64),
-    Str(Arc<str>),
+    Str(String),
 }
 
 /// Binary operator used for infix operations (1 + 1) etc
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum BinOp {
     Add,
     Sub,
@@ -165,26 +164,26 @@ pub enum BinOp {
 }
 
 /// Binary operator used for infix operations (1 + 1) etc
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum UnaryOp {
     Not,
     Neg,
 }
 
-#[derive(Debug, Hash, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Hash, Clone, Copy, Eq, Encode, Decode, PartialEq)]
 pub struct NodeId(usize);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct Expr {
     pub id: NodeId,
     pub kind: ExprKind,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq)]
 pub enum ExprKind {
     Literal(Literal),
-    Identifier(Arc<str>),
+    Identifier(String),
     Binary {
         left: Box<Expr>,
         op: BinOp,
@@ -195,24 +194,25 @@ pub enum ExprKind {
         operand: Box<Expr>,
     },
     Call {
-        name: Spanned<Arc<str>>,
+        name: Spanned<String>,
         args: Vec<Expr>,
     },
+    Unit,
     Block(Vec<Stmt>),
     Error,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct Stmt {
     pub id: NodeId,
     pub kind: StmtKind,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq)]
 pub enum StmtKind {
     Let {
-        name: Spanned<Arc<str>>,
+        name: Spanned<String>,
         type_ann: Option<Spanned<Type>>,
         value: Expr,
     },
@@ -222,13 +222,13 @@ pub enum StmtKind {
     },
     Return(Option<Expr>),
     Function {
-        name: Spanned<Arc<str>>,
+        name: Spanned<String>,
         params: Vec<Param>,
         return_type: Spanned<Type>,
         body: Expr,
     },
     Extern {
-        name: Spanned<Arc<str>>,
+        name: Spanned<String>,
         params: Vec<Param>,
         return_type: Spanned<Type>,
     },
@@ -236,7 +236,7 @@ pub enum StmtKind {
     Error,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum Type {
     I8,
     I16,
@@ -292,12 +292,12 @@ impl<'a> Parser<'a> {
         };
 
         // Store the current token
-        self.current = Some(token.clone());
+        self.current = Some(token);
         token
     }
 
     fn current(&self) -> Token {
-        match self.current.clone() {
+        match self.current {
             Some(token) => token,
             None => Token {
                 kind: LogosToken::Eof,
@@ -313,35 +313,19 @@ impl<'a> Parser<'a> {
 
     fn skip_separator(&mut self) -> bool {
         let mut has_sep = false;
-        if self.current().kind == LogosToken::Newline
-            || self.current().kind == LogosToken::Semicolon
-        {
-            has_sep = true
+        while self.lexer.peek_is(LogosToken::Newline) || self.lexer.peek_is(LogosToken::Semicolon) {
+            self.advance();
+            has_sep = true;
         }
-        loop {
-            if self.lexer.peek_is(LogosToken::Newline) || self.lexer.peek_is(LogosToken::Semicolon)
-            {
-                self.advance();
-                has_sep = true;
-                continue;
-            }
-            break;
-        }
-
         has_sep
     }
 
     fn skip_newlines(&mut self) -> bool {
         let mut has_newline = false;
-        loop {
-            if self.lexer.peek_is(LogosToken::Newline) {
-                self.advance();
-                has_newline = true;
-                continue;
-            }
-            break;
+        while self.lexer.peek_is(LogosToken::Newline) {
+            self.advance();
+            has_newline = true;
         }
-
         has_newline
     }
 
@@ -353,7 +337,7 @@ impl<'a> Parser<'a> {
             Err(ParseError::UnexpectedToken {
                 expected: vec![format!("{expected:?}")],
                 found: format!("{:?}", token.kind),
-                span: token.span.into(),
+                span: token.span,
             })
         }
     }
@@ -372,7 +356,7 @@ impl<'a> Parser<'a> {
                 Err(ParseError::UnexpectedToken {
                     expected: vec![format!("{expected:?}")],
                     found: format!("{:?}", peeked.kind),
-                    span: peeked.span.clone().into(),
+                    span: peeked.span,
                 })
             } else {
                 // Consume the unexpected token and continue
@@ -380,7 +364,7 @@ impl<'a> Parser<'a> {
                 Err(ParseError::UnexpectedToken {
                     expected: vec![format!("{expected:?}")],
                     found: format!("{:?}", consumed.kind),
-                    span: consumed.span.into(),
+                    span: consumed.span,
                 })
             }
         } else {
@@ -419,7 +403,7 @@ impl<'a> Parser<'a> {
             LogosToken::Int => {
                 let text = start_token.text(self.input);
                 let value = text.parse::<i64>().map_err(|_| ParseError::InvalidNumber {
-                    span: start_token.span.clone(),
+                    span: start_token.span,
                     value: text.to_string(),
                 })?;
                 Ok(Expr {
@@ -431,7 +415,7 @@ impl<'a> Parser<'a> {
             LogosToken::Float => {
                 let text = start_token.text(self.input);
                 let value = text.parse::<f64>().map_err(|_| ParseError::InvalidNumber {
-                    span: start_token.span.clone(),
+                    span: start_token.span,
                     value: text.to_string(),
                 })?;
                 Ok(Expr {
@@ -446,7 +430,7 @@ impl<'a> Parser<'a> {
                 let content = &text[1..text.len() - 1];
                 Ok(Expr {
                     id: self.get_node_id(),
-                    kind: ExprKind::Literal(Literal::Str(Arc::from(content))),
+                    kind: ExprKind::Literal(Literal::Str(content.to_string())),
                     span: start_token.span,
                 })
             }
@@ -461,19 +445,19 @@ impl<'a> Parser<'a> {
                 span: start_token.span,
             }),
             LogosToken::Ident => {
-                let name: Arc<str> = Arc::from(start_token.text(self.input));
+                let name = start_token.text(self.input).to_string();
                 let spanned_name = Spanned::new(name.clone(), start_token.span);
                 let ident = Expr {
                     id: self.get_node_id(),
                     kind: ExprKind::Identifier(name),
-                    span: start_token.clone().span,
+                    span: start_token.span,
                 };
 
                 // Handle function calls
                 if self.lexer.peek_is(LogosToken::LParen) {
-                    let opening_span = start_token.span.clone();
+                    let opening_span = start_token.span;
                     self.advance();
-                    self.push_delimiter(LogosToken::LParen, opening_span.clone().into());
+                    self.push_delimiter(LogosToken::LParen, opening_span.into());
 
                     let args = self.parse_argument_list()?;
 
@@ -493,7 +477,7 @@ impl<'a> Parser<'a> {
                     } else {
                         // Missing closing paren in function call
                         self.error(ParseError::MissingDelimiter {
-                            span: self.current().span.clone(),
+                            span: self.current().span,
                             delimiter: ")".to_string(),
                             opening_span: opening_span,
                         });
@@ -512,15 +496,24 @@ impl<'a> Parser<'a> {
                 Ok(ident)
             }
             LogosToken::LParen => {
-                let opening_span = start_token.span.clone();
-                self.push_delimiter(LogosToken::LParen, opening_span.clone().into());
+                let opening_span = start_token.span;
+                self.push_delimiter(LogosToken::LParen, opening_span.into());
                 self.skip_newlines();
+                if self.lexer.peek_is(LogosToken::RParen) {
+                    let end_token = self.next();
+                    self.pop_delimiter();
+                    return Ok(Expr {
+                        id: self.get_node_id(),
+                        kind: ExprKind::Unit,
+                        span: Span::from(start_pos..end_token.span.end),
+                    });
+                }
 
                 let expr = match self.parse_expression(0) {
                     Ok(expr) => expr,
                     Err(e) => {
                         self.error(e);
-                        self.error_expr(start_token.span.clone())
+                        self.error_expr(start_token.span)
                     }
                 };
 
@@ -557,7 +550,7 @@ impl<'a> Parser<'a> {
                     Ok(expr) => expr,
                     Err(e) => {
                         self.error(e);
-                        self.error_expr(start_token.span.clone())
+                        self.error_expr(start_token.span)
                     }
                 };
                 let end_pos = operand.span.end;
@@ -575,7 +568,7 @@ impl<'a> Parser<'a> {
                     Ok(expr) => expr,
                     Err(e) => {
                         self.error(e);
-                        self.error_expr(start_token.span.clone())
+                        self.error_expr(start_token.span)
                     }
                 };
                 let end_pos = operand.span.end;
@@ -589,7 +582,7 @@ impl<'a> Parser<'a> {
                 })
             }
             LogosToken::LBrace => {
-                self.push_delimiter(LogosToken::LBrace, start_token.span.clone().into());
+                self.push_delimiter(LogosToken::LBrace, start_token.span.into());
                 let block = self.parse_block_content(start_pos)?;
                 self.pop_delimiter();
                 Ok(block)
@@ -637,7 +630,7 @@ impl<'a> Parser<'a> {
             }
 
             self.skip_newlines();
-            let peek = self.lexer.peek().cloned();
+            let peek = self.lexer.peek();
             if let Some(peeked) = peek {
                 match peeked.kind {
                     LogosToken::Comma => {
@@ -650,7 +643,7 @@ impl<'a> Parser<'a> {
                         // Try to recover - if we see something that looks like it could be another argument,
                         // assume missing comma
                         if self.looks_like_expression_start() {
-                            let peek_token = peeked.clone();
+                            let peek_token = peeked;
                             self.error(ParseError::UnexpectedToken {
                                 span: peek_token.span.into(),
                                 found: format!("{:?}", peek_token.kind),
@@ -844,12 +837,12 @@ impl<'a> Parser<'a> {
     fn parse_parameter_list(&mut self) -> ParseResult<(Vec<Param>, Span)> {
         let opening_paren_span = if self.lexer.peek_is(LogosToken::LParen) {
             let token = self.next();
-            self.push_delimiter(LogosToken::LParen, token.span.clone().into());
+            self.push_delimiter(LogosToken::LParen, token.span.into());
             token.span
         } else {
             let span = self.lexer.span();
             let e = ParseError::UnexpectedToken {
-                span: span.clone().into(),
+                span: span.into(),
                 found: format!("{:?}", self.lexer.peek_kind()),
                 expected: vec!["(".to_string()],
             };
@@ -867,10 +860,10 @@ impl<'a> Parser<'a> {
                     LogosToken::Ident,
                     &[LogosToken::Colon, LogosToken::Comma, LogosToken::RParen],
                 ) {
-                    Ok(token) => Arc::from(token.text(self.input)),
+                    Ok(token) => token.text(self.input).to_string(),
                     Err(e) => {
                         self.error(e);
-                        Arc::from("_error_")
+                        "_error_".to_string()
                     }
                 };
 
@@ -901,7 +894,7 @@ impl<'a> Parser<'a> {
                         LogosToken::RParen => break,
                         _ => {
                             let e = ParseError::UnexpectedToken {
-                                span: peeked.span.clone().into(),
+                                span: peeked.span.into(),
                                 found: format!("{:?}", peeked.kind),
                                 expected: vec!["','".to_string(), "')'".to_string()],
                             };
@@ -921,9 +914,9 @@ impl<'a> Parser<'a> {
             self.pop_delimiter();
         } else {
             self.error(ParseError::MissingDelimiter {
-                span: self.current().span.clone().into(),
+                span: self.current().span.into(),
                 delimiter: ")".to_string(),
-                opening_span: opening_paren_span.clone().into(),
+                opening_span: opening_paren_span.into(),
             });
         }
 
@@ -931,15 +924,15 @@ impl<'a> Parser<'a> {
     }
 
     /// Helper method to parse function name with error recovery
-    fn parse_function_name(&mut self) -> ParseResult<Spanned<Arc<str>>> {
+    fn parse_function_name(&mut self) -> ParseResult<Spanned<String>> {
         match self.expect_with_recovery(
             LogosToken::Ident,
             &[LogosToken::LParen, LogosToken::RParen, LogosToken::Newline],
         ) {
-            Ok(token) => Ok(Spanned::new(Arc::from(token.text(self.input)), token.span)),
+            Ok(token) => Ok(Spanned::new(token.text(self.input).to_string(), token.span)),
             Err(e) => {
                 self.error(e);
-                Ok(Spanned::new(Arc::from("_error_"), self.current().span))
+                Ok(Spanned::new("_error_".to_string(), self.current().span))
             }
         }
     }
@@ -1042,7 +1035,7 @@ impl<'a> Parser<'a> {
         match self.expect(LogosToken::Ident) {
             Ok(token) => {
                 let type_name = token.text(self.input);
-                let span = token.span.clone();
+                let span = token.span;
                 let type_variant = match type_name {
                     "i8" => Type::I8,
                     "i16" => Type::I16,
@@ -1092,10 +1085,10 @@ impl<'a> Parser<'a> {
                         LogosToken::Ident,
                         &[LogosToken::Eq, LogosToken::Semicolon, LogosToken::Newline],
                     ) {
-                        Ok(token) => Spanned::new(Arc::from(token.text(self.input)), token.span),
+                        Ok(token) => Spanned::new(token.text(self.input).to_string(), token.span),
                         Err(e) => {
                             self.error(e);
-                            Spanned::new(Arc::from("_error_"), self.current().span)
+                            Spanned::new("_error_".to_string(), self.current().span)
                         }
                     };
 
@@ -1118,7 +1111,7 @@ impl<'a> Parser<'a> {
                     ) {
                         self.error(e);
                         // If we don't have an equals sign, create a default value
-                        let value = self.error_expr(self.current().span.clone());
+                        let value = self.error_expr(self.current().span);
                         return Ok(Stmt {
                             id: self.get_node_id(),
                             kind: StmtKind::Let {
@@ -1135,7 +1128,7 @@ impl<'a> Parser<'a> {
                         Ok(expr) => expr,
                         Err(e) => {
                             self.error(e);
-                            self.error_expr(self.current().span.clone())
+                            self.error_expr(self.current().span)
                         }
                     };
 
@@ -1179,7 +1172,7 @@ impl<'a> Parser<'a> {
                             Ok(expr) => expr,
                             Err(e) => {
                                 self.error(e);
-                                self.error_expr(self.current().span.clone())
+                                self.error_expr(self.current().span)
                             }
                         }
                     } else {
@@ -1190,7 +1183,7 @@ impl<'a> Parser<'a> {
                             expected: vec!["{".to_string()],
                         };
                         self.error(e);
-                        self.error_expr(self.current().span.clone())
+                        self.error_expr(self.current().span)
                     };
 
                     Ok(Stmt {
@@ -1238,7 +1231,7 @@ impl<'a> Parser<'a> {
                             Ok(expr) => Some(expr),
                             Err(e) => {
                                 self.error(e);
-                                Some(self.error_expr(self.current().span.clone()))
+                                Some(self.error_expr(self.current().span))
                             }
                         }
                     } else {
@@ -1259,7 +1252,7 @@ impl<'a> Parser<'a> {
 
                 _ => {
                     let expr = self.parse_expression(0)?;
-                    let span = expr.span.clone();
+                    let span = expr.span;
                     Ok(Stmt {
                         id: self.get_node_id(),
                         kind: StmtKind::Expr(expr),
@@ -1300,7 +1293,7 @@ impl<'a> Parser<'a> {
                 Err(e) => {
                     self.error(e);
                     // Create error expression and continue
-                    self.error_expr(self.current().span.clone())
+                    self.error_expr(self.current().span)
                 }
             };
 
@@ -1329,7 +1322,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a complete program (multiple statements)
-    pub fn parse_program(&mut self) -> (Vec<Stmt>, Vec<ParseError>) {
+    pub fn parse_program(mut self) -> (Vec<Stmt>, Vec<ParseError>) {
         let mut statements = Vec::new();
         let mut has_sep = true;
 
@@ -1380,7 +1373,7 @@ impl<'a> Parser<'a> {
             });
         }
 
-        (statements, self.errors.clone())
+        (statements, self.errors)
     }
 }
 

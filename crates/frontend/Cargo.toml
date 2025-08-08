@@ -7,7 +7,7 @@ edition = "2024"
 [dependencies]
 logos = "0.15.0"
 ariadne.workspace = true
-miette.workspace = true
 thiserror.workspace = true
-# miette = { version = "7.0", features = ["fancy"] }
-# thiserror = "2.0"
+bincode.workspace = true
+serde.workspace = true
+sirius.workspace = true

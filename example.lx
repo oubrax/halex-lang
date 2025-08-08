@@ -1,5 +1,5 @@
+
 fn main() -> i32 {
-    let a = 3
-    
-    return a
+
+	return 0
 }
