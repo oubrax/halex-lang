@@ -10,6 +10,7 @@ use std::{
 use ariadne::{Color, Fmt, Source};
 use bincode::{Decode, Encode};
 use frontend::{Expr, ParseError, Parser, ReportedError};
+use resolver::Resolver;
 use tycheck::Checker;
 
 #[derive(Encode, Decode)]
@@ -88,8 +89,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let parse_start = Instant::now();
+    let mut resolver = Resolver::new();
+    resolver.resolve(env::args().skip(1).collect());
+
+    println!("{:?} {:?}", resolver.errors, resolver.parse_errors);
     let (input, ast, parse_errors) = parse_file(&file_path);
-    // println!("{:#?}", &ast);
+    println!("{:#?}", &ast);
     println!(
         "parsed in {}",
         format!("{:?}", parse_start.elapsed()).fg(Color::Yellow)

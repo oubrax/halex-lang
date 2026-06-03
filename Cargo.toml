@@ -1,5 +1,5 @@
 [workspace]
-members = [ "crates/cranelfit_backend","crates/frontend", "crates/halex", "crates/tycheck"]
+members = [ "crates/cranelfit_backend","crates/frontend", "crates/halex", "crates/resolver", "crates/tycheck"]
 resolver = "3"
 
 [workspace.dependencies]

@@ -77,12 +77,16 @@ pub enum LogosToken {
     KwFn,
     #[token("return")]
     KwReturn,
+    #[token("use")]
+    KwUse,
     #[token("not")]
     Not,
     #[token("extern")]
     KwExtern,
     #[token("let")]
     KwLet,
+    #[token("pub")]
+    KwPub,
     #[token("\n")]
     Newline,
     #[token("==")]
@@ -139,6 +143,8 @@ impl std::fmt::Debug for LogosToken {
             Self::KwReturn => write!(f, "return"),
             Self::Not => write!(f, "not"),
             Self::KwExtern => write!(f, "extern"),
+            Self::KwUse => write!(f, "use"),
+            Self::KwPub => write!(f, "pub"),
             Self::KwLet => write!(f, "let"),
             Self::Newline => write!(f, "<newline>"),
             Self::Eqq => write!(f, "=="),

@@ -447,6 +447,7 @@ impl Checker {
                 params,
                 return_type,
                 body,
+                ..
             } => {
                 let name_str = name.inner.clone();
 

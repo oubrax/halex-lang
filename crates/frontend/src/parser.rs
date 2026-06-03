@@ -11,7 +11,7 @@ type Param = (String, Spanned<Type>);
 
 pub type ParseResult<T> = Result<T, ParseError>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ParseError {
     UnexpectedToken {
         span: Span,
@@ -222,15 +222,20 @@ pub enum StmtKind {
     },
     Return(Option<Expr>),
     Function {
+        is_public: bool,
         name: Spanned<String>,
         params: Vec<Param>,
         return_type: Spanned<Type>,
         body: Expr,
     },
     Extern {
+        is_public: bool,
         name: Spanned<String>,
         params: Vec<Param>,
         return_type: Spanned<Type>,
+    },
+    Use {
+        path: Spanned<Vec<String>>,
     },
     Expr(Expr),
     Error,
@@ -772,6 +777,7 @@ impl<'a> Parser<'a> {
                     // Statement boundaries - good places to synchronize
                     LogosToken::KwLet
                     | LogosToken::KwFn
+                    | LogosToken::KwUse
                     | LogosToken::KwReturn
                     | LogosToken::KwExtern => {
                         self.panic_mode = false;
@@ -1077,6 +1083,62 @@ impl<'a> Parser<'a> {
 
         if let Some(peeked) = self.lexer.peek() {
             match peeked.kind {
+                LogosToken::KwUse => {
+                    self.advance();
+
+                    // Parse the module path (can be an identifier or a series of identifiers separated by dots)
+                    let mut module_path_parts = Vec::new();
+                    let mut path_start = None;
+                    let mut path_end = 0;
+
+                    // Parse first identifier
+                    match self.expect_with_recovery(
+                        LogosToken::Ident,
+                        &[LogosToken::Dot, LogosToken::Semicolon, LogosToken::Newline],
+                    ) {
+                        Ok(token) => {
+                            path_start = Some(token.span.start);
+                            path_end = token.span.end;
+                            module_path_parts.push(token.text(self.input).to_string());
+                        }
+                        Err(e) => {
+                            self.error(e);
+                        }
+                    }
+
+                    // Parse additional path segments (if any)
+                    while self.lexer.peek_is(LogosToken::Dot) {
+                        self.advance(); // consume the dot
+
+                        match self.expect_with_recovery(
+                            LogosToken::Ident,
+                            &[LogosToken::Dot, LogosToken::Semicolon, LogosToken::Newline],
+                        ) {
+                            Ok(token) => {
+                                path_end = token.span.end;
+                                module_path_parts.push(token.text(self.input).to_string());
+                            }
+                            Err(e) => {
+                                self.error(e);
+                                module_path_parts.push("_error_".to_string());
+                            }
+                        }
+                    }
+
+                    let path_span = if let Some(start) = path_start {
+                        Span::from(start..path_end)
+                    } else {
+                        self.current().span
+                    };
+
+                    let path = Spanned::new(module_path_parts, path_span);
+
+                    return Ok(Stmt {
+                        id: self.get_node_id(),
+                        kind: StmtKind::Use { path },
+                        span: Span::from(start..path_end),
+                    });
+                }
                 LogosToken::KwLet => {
                     self.advance();
 
@@ -1144,7 +1206,15 @@ impl<'a> Parser<'a> {
                 }
 
                 LogosToken::KwFn => {
-                    self.advance();
+                    // Check for optional 'pub' modifier
+                    let is_public = if self.lexer.peek_is(LogosToken::KwPub) {
+                        self.advance();
+                        true
+                    } else {
+                        false
+                    };
+
+                    self.advance(); // consume 'fn'
 
                     // Parse function name
                     let name = self.parse_function_name()?;
@@ -1189,6 +1259,7 @@ impl<'a> Parser<'a> {
                     Ok(Stmt {
                         id: self.get_node_id(),
                         kind: StmtKind::Function {
+                            is_public,
                             name,
                             params,
                             return_type,
@@ -1199,7 +1270,15 @@ impl<'a> Parser<'a> {
                 }
 
                 LogosToken::KwExtern => {
-                    self.advance();
+                    // Check for optional 'pub' modifier
+                    let is_public = if self.lexer.peek_is(LogosToken::KwPub) {
+                        self.advance();
+                        true
+                    } else {
+                        false
+                    };
+
+                    self.advance(); // consume 'extern'
                     self.expect(LogosToken::KwFn)?;
                     let name = self.parse_function_name()?;
                     let (params, _) = self.parse_parameter_list()?;
@@ -1211,9 +1290,11 @@ impl<'a> Parser<'a> {
                     } else {
                         Spanned::new(Type::Unit, self.current().span)
                     };
+
                     Ok(Stmt {
                         id: self.get_node_id(),
                         kind: StmtKind::Extern {
+                            is_public,
                             name,
                             params,
                             return_type,

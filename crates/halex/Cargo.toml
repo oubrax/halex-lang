@@ -8,3 +8,4 @@ ariadne.workspace = true
 bincode.workspace = true
 frontend = { path = "../frontend"}
 tycheck = { path = "../tycheck"}
+resolver = { path = "../resolver" }
